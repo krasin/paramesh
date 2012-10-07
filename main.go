@@ -6,23 +6,27 @@
 package main
 
 import (
-	//	"fmt"
+	"fmt"
 	"image"
 	"image/color"
-	"image/png"
+	//"image/png"
 	"log"
 	"math"
 	"os"
 
-	//	"github.com/krasin/voxel/nptl"
-//	"github.com/krasin/voxel/raster"
-//	"github.com/krasin/voxel/volume"
+	"github.com/krasin/voxel/nptl"
+	"github.com/krasin/voxel/raster"
+	"github.com/krasin/voxel/volume"
 )
 
 const (
 	VoxelSide = 512
 
 	eps = 1E-4
+)
+
+var (
+	_ = fmt.Printf
 )
 
 type Paramesh interface {
@@ -149,6 +153,91 @@ func findX(v [2]float64) [2]float64 {
 	}
 }*/
 
+func rotateXY(p [3]float64, alpha float64) [3]float64 {
+	return [3]float64{
+		p[0]*math.Cos(alpha) + p[1]*math.Sin(alpha),
+		-p[0]*math.Sin(alpha) + p[1]*math.Cos(alpha),
+		p[2],
+	}
+}
+
+func rotateXZ(p [3]float64, alpha float64) [3]float64 {
+	return [3]float64{
+		p[0]*math.Cos(alpha) + p[2]*math.Sin(alpha),
+		p[1],
+		-p[0]*math.Sin(alpha) + p[2]*math.Cos(alpha),
+	}
+}
+
+func rotateYZ(p [3]float64, alpha float64) [3]float64 {
+	return [3]float64{
+		p[0],
+		p[1]*math.Cos(alpha) + p[2]*math.Sin(alpha),
+		-p[1]*math.Sin(alpha) + p[2]*math.Cos(alpha),
+	}
+}
+
+func rotate3(p, angles [3]float64) [3]float64 {
+	p = rotateXY(p, angles[0])
+	p = rotateXZ(p, angles[1])
+	p = rotateYZ(p, angles[2])
+	return p
+}
+
+func draw3d(mesh Paramesh, vol *volume.SparseVolume, grid *raster.Grid, step float64) {
+	var cur [3]float64
+	front := [3]float64{1, 0, 0}
+	side := [3]float64{0, 1, 0}
+	up := [3]float64{0, 0, 1}
+
+	var t3 float64
+	setPixel := func(x, y float64) {
+		//		fmt.Printf("setPixel(x=%f, y=%f) ", x, y)
+		p := [3]float64{
+			cur[0] + side[0]*x + up[0]*y,
+			cur[1] + side[1]*x + up[1]*y,
+			cur[2] + side[2]*x + up[2]*y,
+		}
+		p2 := [3]int{
+			int(float64(grid.N[0]) * (p[0] - grid.P0[0]) / (grid.P1[0] - grid.P0[0])),
+			int(float64(grid.N[1]) * (p[1] - grid.P0[1]) / (grid.P1[1] - grid.P0[1])),
+			int(float64(grid.N[2]) * (p[2] - grid.P0[2]) / (grid.P1[2] - grid.P0[2])),
+		}
+		//		fmt.Printf("vol.Set(%d, %d, %d, 1)\n", p2[0], p2[1], p2[2])
+		vol.Set(p2[0], p2[1], p2[2], 1)
+	}
+	for t3 = 0; t3 <= 1; t3 += step {
+		v3 := mesh.V3(t3)
+		draw2d2(mesh, setPixel, step)
+		cur = [3]float64{
+			cur[0] + front[0]*step,
+			cur[1] + front[1]*step,
+			cur[2] + front[2]*step,
+		}
+		front = rotate3(front, v3)
+		side = rotate3(side, v3)
+		up = rotate3(up, v3)
+	}
+}
+
+func draw2d2(mesh Paramesh, setPixel func(x, y float64), step float64) {
+	var cur [2]float64
+	for t2 := float64(0); t2 <= 1; t2 += step {
+		v2 := mesh.V2(t2)
+
+		x1 := findX(v2)
+
+		len1 := mesh.S1(t2)
+		for t1 := float64(0); t1 <= 1; t1 += step {
+			cur1 := t1 * len1
+			setPixel(cur[0]+cur1*x1[0],
+				cur[1]+cur1*x1[1])
+		}
+		cur[0] += v2[0] * step
+		cur[1] += v2[1] * step
+	}
+}
+
 func draw2d(x0, y0 int, mesh Paramesh, img *image.RGBA, step float64) {
 	var cur [2]float64
 	for t2 := float64(0); t2 <= 1; t2 += step {
@@ -175,31 +264,37 @@ func draw2d(x0, y0 int, mesh Paramesh, img *image.RGBA, step float64) {
 }
 
 func main() {
-	img := image.NewRGBA(image.Rect(0, 0, 1024, 768))
+	//	img := image.NewRGBA(image.Rect(0, 0, 1024, 768))
 	//	draw2d(100, 100, &paramCube{500}, img, 0.002)
 	//	draw2d(100, 100, &triangle{500}, img, 0.002)
-	draw2d(100, 100, &circle{300}, img, 0.002)
-	f, err := os.OpenFile("lala.png", os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
-	if err != nil {
-		log.Fatal(err)
+	//	draw2d(100, 100, &circle{300}, img, 0.002)
+	//	f, err := os.OpenFile("lala.png", os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
+	//	if err != nil {
+	//		log.Fatal(err)
+	//	}
+	//	defer f.Close()
+	//	if err = png.Encode(f, img); err != nil {
+	//		log.Fatal(err)
+	//	}
+
+	vol := volume.NewSparseVolume(VoxelSide)
+
+	grid := raster.Grid{
+		P0: [3]float64{-512, -512, -512},
+		P1: [3]float64{512, 512, 512},
+		N:  [3]int64{VoxelSide, VoxelSide, VoxelSide},
 	}
-	defer f.Close()
-	if err = png.Encode(f, img); err != nil {
-		log.Fatal(err)
+
+	draw3d(&paramCube{256}, vol, &grid, 0.001)
+
+	grid2 := raster.Grid{
+		P0: [3]float64{0, 0, 0},
+		P1: [3]float64{1024, 1024, 1024},
+		N:  [3]int64{VoxelSide, VoxelSide, VoxelSide},
 	}
 
-	//	vol := volume.NewSparseVolume(VoxelSide)
-
-	/*	grid := raster.Grid{
-			P0: [3]float64{0, 0, 0},
-			P1: [3]float64{1, 1, 1},
-			N:  [3]int64{VoxelSide, VoxelSide, VoxelSide},
-		}
-
-		rasterize(&paramCube{256}, vol, &grid, 1)
-
-		if err := nptl.WriteNptl(vol, grid, os.Stdout); err != nil {
-			log.Fatalf("WriteNptl: %v", err)
-		}*/
+	if err := nptl.WriteNptl(vol, grid2, os.Stdout); err != nil {
+		log.Fatalf("WriteNptl: %v", err)
+	}
 
 }
